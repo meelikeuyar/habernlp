@@ -1,0 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+transformers==4.44.0
+sqlalchemy==2.0.35
+requests==2.32.3
+beautifulsoup4==4.12.3
+pandas==2.2.3
+python-dotenv==1.0.1
+feedparser==6.0.11
+streamlit==1.37.0
+plotly==5.24.0
+loguru==0.7.2
+scikit-learn==1.5.2
+wordcloud==1.9.3
+matplotlib==3.9.0

@@ -176,15 +176,108 @@ label[data-testid="stWidgetLabel"] p{font-family:'Inter',sans-serif!important;fo
 
 
 # ─────────────────────────────────────────────
-# DATA LAYER
+# DATA LAYER (local DB + cloud auto-scrape)
 # ─────────────────────────────────────────────
 @st.cache_resource
 def get_engine():
     db_path = Path(__file__).parent / "data" / "habernlp.db"
-    if not db_path.exists():
-        st.error("Veritabanı bulunamadı: data/habernlp.db — önce `python main.py` çalıştırın.")
-        st.stop()
-    return create_engine(f"sqlite:///{db_path}")
+    if db_path.exists():
+        return create_engine(f"sqlite:///{db_path}")
+    # Cloud mode: create in-memory DB and auto-populate
+    return _cloud_bootstrap()
+
+
+def _cloud_bootstrap():
+    """Scrape fresh news and analyze for cloud deployment."""
+    import sqlite3
+    db_path = Path(__file__).parent / "data" / "habernlp.db"
+    db_path.parent.mkdir(exist_ok=True)
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    # Create articles table
+    with engine.connect() as conn:
+        conn.execute(
+            __import__("sqlalchemy").text(
+                "CREATE TABLE IF NOT EXISTS articles ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "baslik TEXT NOT NULL,"
+                "url TEXT,"
+                "kaynak TEXT,"
+                "tarih DATETIME,"
+                "sentiment TEXT,"
+                "sentiment_score REAL"
+                ")"
+            )
+        )
+        conn.commit()
+
+    # Scrape
+    try:
+        from src.scraper.scraper import haber_cek
+        haberler = haber_cek()
+    except Exception:
+        haberler = _fallback_scrape()
+
+    # Analyze and insert
+    analiz_fn = _get_analiz_fn()
+    with engine.connect() as conn:
+        for h in haberler:
+            label, score = analiz_fn(h["baslik"])
+            conn.execute(
+                __import__("sqlalchemy").text(
+                    "INSERT INTO articles (baslik, url, kaynak, tarih, sentiment, sentiment_score) "
+                    "VALUES (:b, :u, :k, :t, :s, :sc)"
+                ),
+                {"b": h["baslik"], "u": h["url"], "k": h["kaynak"],
+                 "t": h["tarih"].isoformat(), "s": label, "sc": score},
+            )
+        conn.commit()
+    return engine
+
+
+def _get_analiz_fn():
+    """Try BERT, fallback to rules."""
+    try:
+        from src.nlp.sentiment import analiz
+        return analiz
+    except Exception:
+        return _rule_analiz
+
+
+def _rule_analiz(baslik: str):
+    """Lightweight fallback sentiment."""
+    _POZ = {"başarı", "zafer", "güzel", "harika", "kazandı", "büyüme", "şampiyon", "rekor", "artış", "umut", "barış"}
+    _NEG = {"savaş", "ölüm", "kriz", "patlama", "saldırı", "felaket", "düşüş", "terör", "yangın", "deprem", "cinayet", "gözaltı", "kaza"}
+    words = set(re.findall(r"\b\w+\b", baslik.lower()))
+    p, n = len(words & _POZ), len(words & _NEG)
+    if n > p: return "negatif", -1.0
+    if p > n: return "pozitif", 1.0
+    return "nötr", 0.0
+
+
+def _fallback_scrape():
+    """Minimal RSS scrape without project imports."""
+    import feedparser
+    feeds = [
+        ("T24", "https://t24.com.tr/rss"),
+        ("BBC Türkçe", "https://feeds.bbci.co.uk/turkce/rss.xml"),
+        ("NTV", "https://www.ntv.com.tr/gundem.rss"),
+        ("Hürriyet", "https://www.hurriyet.com.tr/rss/gundem"),
+        ("Sözcü", "https://www.sozcu.com.tr/rss/gundem.xml"),
+        ("Habertürk", "https://www.haberturk.com/rss"),
+        ("TRT Haber", "https://www.trthaber.com/manset.rss"),
+        ("DW Türkçe", "https://rss.dw.com/xml/rss-tur-all"),
+    ]
+    haberler = []
+    for ad, url in feeds:
+        try:
+            d = feedparser.parse(url)
+            for e in d.entries[:20]:
+                haberler.append({"baslik": e.get("title", ""), "url": e.get("link", ""),
+                                 "kaynak": ad, "tarih": datetime.now()})
+        except Exception:
+            pass
+    return haberler
 
 
 @st.cache_data(ttl=300)
