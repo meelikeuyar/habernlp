@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  habernlp:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - LOG_LEVEL=INFO
+      - SCRAPE_INTERVAL=60
+      - API_PORT=8000
+    restart: unless-stopped
